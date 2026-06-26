@@ -1,0 +1,16 @@
+{
+  "name": "harness-v1",
+  "version": "1.0.0",
+  "description": "Agentic harness",
+  "main": "index.js",
+  "scripts": {
+    "start": "./agent/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Lech Wojas",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "langfuse": "^3.38.20"
+  }
+}
