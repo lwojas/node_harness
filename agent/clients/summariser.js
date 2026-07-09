@@ -16,6 +16,8 @@ Return a text string only with the structure below:
 
 Purpose:
 A short one line description
+Important_functions:
+Short 3 line max description
 Imports:
 Function name and path only
 Exports:

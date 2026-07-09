@@ -1,9 +1,14 @@
 const { chat } = require("./clients/ollama");
 const { AgentMemory } = require("./memory/agentMemory");
 const { summarizeText } = require("./clients/summariseText");
-const { devPrompt } = require("./prompts/systemPrompts");
+const { devPrompt, devPromptv2 } = require("./prompts/systemPrompts");
 const { langfuse } = require("./logging/tracer");
 const { serviceLocator } = require("./services/serviceLocator");
+const { intentRouter } = require("./routers/intentRouter");
+const { scopeRouter } = require("./routers/scopeRouter");
+const { knowledgeRouter } = require("./routers/knowledgeRouter");
+const { userRouter } = require("./routers/userRouter");
+const { networkRouter } = require("./routers/networkRouter");
 
 const memory = new AgentMemory();
 
@@ -16,7 +21,24 @@ async function run(model, messages, toolDefinitions) {
     },
   });
 
+  const userPrompt = messages[0].content;
+
+  // Add trace to the serviceLocator so we can log LLM calls outside the main loop
   serviceLocator.trace = trace;
+
+  const contextFlags = {
+    intent: await intentRouter(userPrompt), // Modify or Observe
+    scope: await scopeRouter(userPrompt), // WIDE or NARROW
+    isKnowledgeComplete: await knowledgeRouter(userPrompt), // COMPLETE or INCOMPLETE
+    needsLocalUser: await userRouter(userPrompt), // Localhost knowledge required? LOCAL or NONE
+    needsLocalNetwork: await networkRouter(userPrompt), // Local network knowledge required? LOCAL or NONE
+  };
+  // const intent = await intentRouter(messages);
+  // const scope = await scopeRouter(messages);
+  // const isKnowledgeComplete = await knowledgeRouter(messages);
+  // const needsLocalUser = await userRouter(messages);
+  // const needsLocalNetwork = await networkRouter(messages);
+
   const tools = Object.values(toolDefinitions).map((t) => t.schema);
 
   const MAX_ITERATIONS = 20;
@@ -31,12 +53,10 @@ async function run(model, messages, toolDefinitions) {
     const prompt = [
       {
         role: "system",
-        // content: memory.buildContext(),
-        content: devPrompt,
+        content: devPromptv2,
       },
       ...messages,
-      { role: "user", content: memory.buildContext() },
-      //   ,
+      { role: "user", content: memory.buildContext(contextFlags) },
     ];
 
     const generation = iterationSpan.generation({
@@ -44,36 +64,24 @@ async function run(model, messages, toolDefinitions) {
       model,
       input: prompt,
     });
-
-    // const response = await chat(model, prompt, tools);
-
-    const res = await chat(model, prompt, tools);
+    const res = await chat(model, prompt, tools, 8192);
     const response = res.message;
-
     const usage = {
       input: res.prompt_eval_count ?? 0,
       output: res.eval_count ?? 0,
     };
-
     generation.end({
       output: res.message,
       usage,
     });
-
+    console.log("[Agent] - LLM response:\n");
     console.dir(response, { depth: null });
-
-    // if (response.thinking) {
-    //   memory.lastTrainOfThought = response.thinking;
-    // }
+    // console.log("[Agent]: LLM is thinking\n");
+    // console.log(response.thinking);
 
     if (!response.tool_calls || response.tool_calls.length === 0) {
+      if (!response.content) continue;
       console.log("\nFinished.");
-      // iterationSpan.update({
-      //   metadata: {
-      //     memory: memory.buildContext(),
-      //   },
-      //   usage,
-      // });
       await langfuse.flushAsync?.();
       return response;
     }
@@ -84,54 +92,39 @@ async function run(model, messages, toolDefinitions) {
         throw new Error(`Unknown tool: ${call.function.name}`);
       }
 
-      console.log(`Executing ${call.function.name}`, call.function.arguments);
-
-      //   const result = await tool.handler(call.function.arguments);
+      console.log(
+        `[Agent] - Executing ${call.function.name}`,
+        call.function.arguments,
+      );
 
       try {
-        // const result = await tool.handler(call.function.arguments);
-
         const toolSpan = iterationSpan.span({
           name: call.function.name,
           input: call.function.arguments,
         });
-
         const result = await tool.handler(call.function.arguments);
-
+        memory.rememberToolOutput({
+          role: "tool",
+          tool_call_id: call.id,
+          content: result,
+        });
         toolSpan.end({
           output: result,
         });
-
         switch (call.function.name) {
           case "readDirectory":
             memory.rememberDirectory(call.function.arguments.path, result);
             break;
-
           case "readFile":
             await memory.rememberFile(call.function.arguments.path, result);
             break;
         }
-
         iterationSpan.update({
           metadata: {
-            memory: memory.buildContext(),
+            memory: memory.buildContext(contextFlags),
           },
           usage,
         });
-
-        memory.toolOutput = {
-          role: "tool",
-          tool_call_id: call.id,
-          content: JSON.stringify({
-            success: true,
-            result,
-          }),
-        };
-
-        // console.log("Tool Result:");
-        // console.dir(result, { depth: null });
-
-        // Update memory...
       } catch (err) {
         memory.toolOutput = {
           role: "tool",

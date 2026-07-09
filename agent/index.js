@@ -1,11 +1,17 @@
 const { run } = require("./controller");
 const { toolDefinitions } = require("./tools/toolDefinitions");
-const { narrowTest, wideTest, wideTest2 } = require("./prompts/userPrompts");
+const {
+  narrowTest,
+  wideTest,
+  wideTest2,
+  narrowTestv2,
+  narrowTestv3,
+} = require("./prompts/userPrompts");
 
 const messages = [
   {
     role: "user",
-    content: wideTest,
+    content: narrowTest,
   },
 ];
 
